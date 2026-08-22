@@ -39,3 +39,24 @@ export async function runOcrFallbackPages(file: File, pageNumbers?: number[], op
 export async function runOcrFallback(file: File, pageNumbers?: number[]): Promise<string> {
   return (await runOcrFallbackPages(file, pageNumbers)).join("\n\n");
 }
+
+export async function runOcrImage(file: File, options?: { signal?: AbortSignal; onProgress?: (completed: number, total: number) => void }): Promise<string> {
+  const image = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("อ่านรูปภาพไม่สำเร็จ"));
+    reader.onerror = () => reject(new Error("อ่านรูปภาพไม่สำเร็จ"));
+    reader.readAsDataURL(file);
+  });
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("../../workers/ocr.worker.ts", import.meta.url));
+    const abort = () => { worker.terminate(); reject(new DOMException("Aborted", "AbortError")); };
+    options?.signal?.addEventListener("abort", abort, { once: true });
+    worker.onmessage = (event: MessageEvent<{ texts?: string[]; error?: string; progress?: number; total?: number }>) => {
+      if (event.data.progress !== undefined) { options?.onProgress?.(event.data.progress, event.data.total ?? 1); return; }
+      options?.signal?.removeEventListener("abort", abort); worker.terminate();
+      if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.texts?.[0]?.trim() ?? "");
+    };
+    worker.onerror = () => { options?.signal?.removeEventListener("abort", abort); worker.terminate(); reject(new Error("OCR worker failed")); };
+    worker.postMessage({ images: [image] });
+  });
+}

@@ -22,7 +22,8 @@ The summarize route explicitly uses the Node.js runtime. No database, cache, or 
 
 ## Safety and operating limits
 
-- PDF processing and OCR run in the browser. Files are limited to 25 MB and a maximum of 50 selected pages per run.
+- PDF, DOCX, and image processing run in the browser. Files are limited to 25 MB and PDFs to a maximum of 50 selected pages per run.
+- DOCX imports raw text with Mammoth. JPG, JPEG, PNG, WebP, BMP, and non-animated GIF use local Tesseract OCR. Legacy `.doc` is rejected with guidance to save as `.docx` because the available browser parsers are not mature enough for this security baseline.
 - Cloud summarization accepts at most 120,000 characters. Text repair modes and their API route have been removed.
 - API routes have sanitized errors, provider timeouts, request-size guards, and best-effort per-instance rate limits.
 - Before production, configure Vercel Firewall rate limiting for `/api/summarize`; an in-memory limiter cannot enforce a global quota across serverless instances.
