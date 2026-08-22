@@ -202,11 +202,14 @@ export function Workspace() {
         {text && <div className="mb-3 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div><p className="font-semibold text-slate-900">รูปแบบผลลัพธ์</p><p className="mt-1 text-xs text-slate-600">เลือกประมวลผลภายในอุปกรณ์ หรือใช้ Cloud AI เมื่อได้รับอนุญาต</p></div>
-            <label className="flex cursor-pointer items-center gap-3 rounded-full border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
-              <span className={aiProvider === "local" ? "text-fuchsia-700" : ""}>Local AI</span>
-              <input type="checkbox" role="switch" aria-label="เลือกใช้ Cloud AI" checked={aiProvider === "cloud"} onChange={(event) => { setAiProvider(event.target.checked ? "cloud" : "local"); setPendingCloudMode(null); }} className="h-5 w-9 accent-fuchsia-600" />
-              <span className={aiProvider === "cloud" ? "text-fuchsia-700" : ""}>Cloud AI</span>
-            </label>
+            <div className="ai-provider-toggle" aria-label={`กำลังใช้ ${aiProvider === "local" ? "Local AI" : "Cloud AI"}`}>
+              <span className={`ai-provider-label ${aiProvider === "local" ? "ai-provider-label-active" : ""}`}>Local</span>
+              <label className="ai-switch">
+                <input type="checkbox" role="switch" aria-label="สลับระหว่าง Local AI และ Cloud AI" checked={aiProvider === "cloud"} onChange={(event) => { setAiProvider(event.target.checked ? "cloud" : "local"); setPendingCloudMode(null); }} />
+                <span className="ai-switch-track" aria-hidden="true"><span className="ai-switch-thumb" /></span>
+              </label>
+              <span className={`ai-provider-label ${aiProvider === "cloud" ? "ai-provider-label-cloud" : ""}`}>Cloud</span>
+            </div>
           </div>
           {aiProvider === "cloud" && <div role="alert" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"><strong>คำเตือนด้านความปลอดภัยของข้อมูลองค์กร</strong><p className="mt-1">Cloud AI จะส่งข้อความที่จัดเรียงแล้วไปยัง Groq และอาจส่งไปยัง Gemini หาก Groq ไม่พร้อมใช้งาน โปรดอย่าใช้กับข้อมูลลับ ข้อมูลส่วนบุคคล หรือข้อมูลภายในที่ไม่ได้รับอนุญาต ระบบจะขอคำยืนยันอีกครั้งก่อนส่งทุกครั้ง</p></div>}
           {aiProvider === "local" && isMobile && <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">อุปกรณ์นี้ไม่รองรับ Local AI ขั้นสูง กรุณาใช้ PC ที่รองรับ WebGPU หรือเลือก Cloud AI โดยตรวจสอบสิทธิ์ของข้อมูลก่อน</p>}
