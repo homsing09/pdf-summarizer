@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
-import { repairTextLocally } from "@/lib/ai/local-cleaner";
+import { localAiErrorMessage, repairTextLocally } from "@/lib/ai/local-cleaner";
 import { extractPdfText, getPdfPageCount } from "@/lib/pdf/extract-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
 import { runOcrFallback } from "@/lib/pdf/ocr-fallback";
@@ -82,7 +82,7 @@ export function Workspace() {
       setText(repaired); setView("cleaned"); setSummary("");
       setStatus("Local AI แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Local AI ทำงานไม่สำเร็จ");
+      setStatus(localAiErrorMessage(error));
     } finally { setBusy(false); }
   }
 

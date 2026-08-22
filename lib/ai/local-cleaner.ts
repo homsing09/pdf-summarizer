@@ -1,14 +1,15 @@
-import { CreateWebWorkerMLCEngine, type MLCEngineInterface } from "@mlc-ai/web-llm";
+import { CreateMLCEngine, type MLCEngineInterface } from "@mlc-ai/web-llm";
 import { replaceSelectedLines, selectTextForLocalRepair } from "@/lib/pdf/detect-noisy-text";
 
 const LOCAL_MODEL = "Qwen2.5-0.5B-Instruct-q4f16_1-MLC";
 let enginePromise: Promise<MLCEngineInterface> | null = null;
 
 async function getEngine(onProgress: (message: string) => void) {
-  if (!("gpu" in navigator)) throw new Error("Browser หรืออุปกรณ์นี้ไม่รองรับ WebGPU");
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter?: () => Promise<unknown> } }).gpu;
+  if (!gpu || typeof gpu.requestAdapter !== "function") throw new Error("Browser หรืออุปกรณ์นี้ไม่รองรับ WebGPU");
+  if (!await gpu.requestAdapter()) throw new Error("ไม่พบ GPU adapter ที่รองรับ Local AI");
   if (!enginePromise) {
-    enginePromise = CreateWebWorkerMLCEngine(
-      new Worker(new URL("../../workers/local-cleaner.worker.ts", import.meta.url), { type: "module" }),
+    enginePromise = CreateMLCEngine(
       LOCAL_MODEL,
       { initProgressCallback: (report) => onProgress(`กำลังเตรียม Local AI ${Math.round(report.progress * 100)}%`) },
     ).catch((error) => { enginePromise = null; throw error; });
@@ -18,6 +19,14 @@ async function getEngine(onProgress: (message: string) => void) {
 
 function cleanAnswer(answer: string): string {
   return answer.replace(/^```(?:text)?\s*/i, "").replace(/```$/i, "").trim();
+}
+
+export function localAiErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/WebGPU|GPU adapter/i.test(message)) return message;
+  if (/network|fetch|download/i.test(message)) return "ดาวน์โหลดโมเดล Local AI ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่";
+  if (/memory|allocation|device lost|out of/i.test(message)) return "หน่วยความจำ GPU ไม่เพียงพอสำหรับ Local AI กรุณาใช้โหมดมาตรฐาน";
+  return "Local AI เริ่มทำงานไม่สำเร็จ กรุณาใช้ Chrome/Edge รุ่นล่าสุด หรือลองโหมดมาตรฐาน";
 }
 
 export async function repairTextLocally(text: string, mode: "auto" | "all", onProgress: (message: string) => void): Promise<string> {
