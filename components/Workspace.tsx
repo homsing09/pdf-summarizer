@@ -174,6 +174,6 @@ export function Workspace() {
         </div>
       </section>
     </div>}
-    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · Cloud repair ทำงานเมื่อผู้ใช้เลือกเท่านั้น</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong></span></footer>
+    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · Cloud repair ทำงานเมื่อผู้ใช้เลือกเท่านั้น</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong> · <a href="https://www.facebook.com/homsing" target="_blank" rel="noopener noreferrer" className="font-semibold text-fuchsia-700 underline decoration-fuchsia-300 underline-offset-2 hover:text-fuchsia-500">ติดต่อผ่าน Facebook</a></span></footer>
   </main>;
 }
