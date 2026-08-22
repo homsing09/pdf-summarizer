@@ -5,7 +5,6 @@ import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
 import { localAiErrorMessage } from "@/lib/ai/local-ai-error";
 import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
 import { extractPdfText, getPdfPageCount, hasUsableText } from "@/lib/pdf/extract-text";
-import { selectTextForLocalRepair } from "@/lib/pdf/detect-noisy-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
 import { runOcrFallbackPages } from "@/lib/pdf/ocr-fallback";
 import { createPageRange } from "@/lib/pdf/page-selection";
@@ -13,7 +12,7 @@ import type { SummaryMode } from "@/lib/validation/summarize.schema";
 import { PdfViewer } from "./PdfViewer";
 import { UploadZone } from "./UploadZone";
 
-const modes: Array<[SummaryMode, string]> = [["key_points", "ประเด็นสำคัญ"], ["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
+const modes: Array<[SummaryMode, string]> = [["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
 type TextView = "cleaned" | "raw" | "summary";
 
 export function Workspace() {
@@ -27,8 +26,7 @@ export function Workspace() {
   const [text, setText] = useState("");
   const [summary, setSummary] = useState("");
   const [view, setView] = useState<TextView>("cleaned");
-  const [mode, setMode] = useState<SummaryMode>("key_points");
-  const [cleanerMode, setCleanerMode] = useState<"standard" | "auto" | "all" | "cloud">("standard");
+  const [summaryMode, setSummaryMode] = useState<SummaryMode>("key_points");
   const isMobile = useSyncExternalStore(
     () => () => undefined,
     () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia("(pointer: coarse)").matches,
@@ -73,41 +71,50 @@ export function Workspace() {
         } catch { note = " · OCR บางหน้าไม่สำเร็จ"; }
       }
       const rawResult = rawPages.join("\n\n").trim();
-      let cleanedResult = cleanedPages.join("\n\n").trim();
-      if (selectTextForLocalRepair(cleanedResult, "auto").length) {
-        setStatus("พบอักขระผิดปกติ — กำลังแก้ความสมบูรณ์ของข้อความ…");
-        try { cleanedResult = await repairTextInCloud(cleanedResult, "auto"); }
-        catch { note += " · AI แก้อักขระไม่สำเร็จ (ยังใช้ข้อความมาตรฐานได้)"; }
-      }
+      const cleanedResult = cleanedPages.join("\n\n").trim();
       setRawText(rawResult); setText(cleanedResult); setSummary(""); setView("cleaned");
-      setStatus(hasUsableText(cleanedResult) ? `อ่านและตรวจข้อความสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}` : `ไม่พบข้อความที่เพียงพอในหน้าที่เลือก${note}`);
+      if (!hasUsableText(cleanedResult)) {
+        setStatus(`ไม่พบข้อความที่เพียงพอในหน้าที่เลือก${note}`);
+        return;
+      }
+      setStatus("อ่านข้อความแล้ว — กำลังสรุปประเด็นสำคัญ…");
+      try {
+        const keyPoints = await requestSummary(cleanedResult, "key_points");
+        setSummary(keyPoints); setSummaryMode("key_points"); setView("summary");
+        setStatus(`อ่านและสรุปสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}`);
+      } catch (error) {
+        setStatus(`${error instanceof Error ? error.message : "สรุปประเด็นสำคัญไม่สำเร็จ"} · ข้อความจัดเรียงแล้วยังใช้งานได้${note}`);
+      }
     } catch (error) { setStatus(error instanceof Error ? error.message : "อ่าน PDF ไม่สำเร็จ กรุณาลองใหม่"); }
     finally { setBusy(false); }
   }
 
-  async function summarize() {
+  async function requestSummary(sourceText: string, requestedMode: SummaryMode): Promise<string> {
+    const response = await fetch("/api/summarize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: sourceText, mode: requestedMode }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? "Request failed");
+    return data.summary;
+  }
+
+  async function summarize(requestedMode: SummaryMode) {
     setBusy(true); setStatus("กำลังสรุป…"); setSummary("");
     try {
-      const response = await fetch("/api/summarize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, mode }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Request failed");
-      setSummary(data.summary); setView("summary"); setStatus("สรุปเรียบร้อย");
+      setSummary(await requestSummary(text, requestedMode)); setSummaryMode(requestedMode); setView("summary"); setStatus("สรุปเรียบร้อย");
     } catch (error) { setStatus(error instanceof Error ? error.message : "สรุปไม่สำเร็จ"); }
     finally { setBusy(false); }
   }
 
-  async function runAiRepair() {
+  async function runAiRepair(provider: "local" | "cloud") {
     if (!text) return;
-    const repairMode = cleanerMode === "all" ? "all" : "auto";
     setBusy(true);
     try {
-      const repaired = cleanerMode === "cloud"
+      const repaired = provider === "cloud"
         ? await repairTextInCloud(text, "auto")
-        : await (await import("@/lib/ai/local-cleaner")).repairTextLocally(text, repairMode, setStatus);
+        : await (await import("@/lib/ai/local-cleaner")).repairTextLocally(text, "auto", setStatus);
       setText(repaired); setView("cleaned"); setSummary("");
-      setStatus(`${cleanerMode === "cloud" ? "AI สำหรับมือถือ" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
+      setStatus(`${provider === "cloud" ? "Cloud AI" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
     } catch (error) {
-      setStatus(cleanerMode === "cloud" ? (error instanceof Error ? error.message : "AI สำหรับมือถือทำงานไม่สำเร็จ") : localAiErrorMessage(error));
+      setStatus(provider === "cloud" ? (error instanceof Error ? error.message : "Cloud AI ทำงานไม่สำเร็จ") : localAiErrorMessage(error));
     } finally { setBusy(false); }
   }
 
@@ -122,9 +129,9 @@ export function Workspace() {
       <div className="text-right"><p className="text-sm font-medium text-slate-700">{status}</p><p className="mt-1 text-xs text-slate-500">ประมวลผล PDF และ OCR ภายใน browser</p></div>
     </header>
     {!url && <section className="paper-panel mb-5 p-5 md:p-8"><UploadZone onFile={load} /></section>}
-    <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(430px,.95fr)]">
-      <PdfViewer url={url} />
-      <section className="paper-panel flex min-h-[610px] flex-col p-4 md:p-5">
+    {url && <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(430px,.95fr)]">
+      <div className="order-2 lg:order-1"><PdfViewer url={url} /></div>
+      <section className="paper-panel order-1 flex min-h-[610px] flex-col p-4 md:p-5 lg:order-2">
         {file && <div className="mb-4 rounded-2xl border border-fuchsia-100 bg-fuchsia-50/60 p-4">
           <div className="mb-3 flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-900">เลือกหน้าที่ต้องการอ่าน</p><p className="text-sm text-slate-600">{file.name} · ทั้งหมด {totalPages || "…"} หน้า</p></div><span className="page-badge">{totalPages} หน้า</span></div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -135,28 +142,24 @@ export function Workspace() {
           </div>
         </div>}
         {text && <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
-          <div className="mb-3"><p className="font-semibold text-slate-900">การจัดเรียงข้อความ</p><p className="text-xs text-slate-600">{isMobile ? "ตรวจพบโทรศัพท์ — แนะนำ AI สำหรับมือถือ" : "Local AI ทำงานใน Browser ไม่ใช้ Groq token · ครั้งแรกต้องดาวน์โหลดโมเดลประมาณ 1 GB"}</p></div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <button onClick={() => setCleanerMode("standard")} className={`mode-button ${cleanerMode === "standard" ? "mode-button-active" : ""}`}>มาตรฐาน</button>
-            <button onClick={() => setCleanerMode("cloud")} className={`mode-button ${cleanerMode === "cloud" ? "mode-button-active" : ""}`}>AI สำหรับมือถือ</button>
-            {!isMobile && <button onClick={() => setCleanerMode("auto")} className={`mode-button ${cleanerMode === "auto" ? "mode-button-active" : ""}`}>Auto Local AI</button>}
-            {!isMobile && <button onClick={() => setCleanerMode("all")} className={`mode-button ${cleanerMode === "all" ? "mode-button-active" : ""}`}>Local AI ทั้งหมด</button>}
-            {cleanerMode !== "standard" && <button disabled={busy} onClick={runAiRepair} className="primary-button ml-auto">{cleanerMode === "cloud" ? "แก้ข้อความบนมือถือ" : "แก้ข้อความด้วย Local AI"}</button>}
+          <div className="mb-3"><p className="font-semibold text-slate-900">ปรับความสมบูรณ์ของข้อความ (เลือกใช้เมื่อจำเป็น)</p><p className="text-xs text-slate-600">ระบบจัดเรียงมาตรฐานทำงานให้แล้วอัตโนมัติ โดยไม่ใช้ AI และไม่ส่งข้อมูลออกจากเครื่อง</p></div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-xl border border-violet-100 bg-white p-3"><p className="text-sm font-semibold">Local AI · แนะนำสำหรับ PC</p><p className="mt-1 text-xs text-slate-600">ข้อดี: เป็นส่วนตัว ไม่ใช้ API quota · ข้อเสีย: ดาวน์โหลดประมาณ 1 GB ใช้ RAM/GPU สูง และไม่เหมาะกับมือถือ</p><button disabled={busy || isMobile} onClick={() => runAiRepair("local")} className="primary-button mt-3 w-full">{isMobile ? "ใช้ไม่ได้บนอุปกรณ์นี้" : "ซ่อมด้วย Local AI"}</button></div>
+            <div className="rounded-xl border border-violet-100 bg-white p-3"><p className="text-sm font-semibold">Cloud AI · PC / iOS / Android</p><p className="mt-1 text-xs text-slate-600">ข้อดี: ไม่ดาวน์โหลดโมเดลและทำงานบนมือถือ · ข้อเสีย: ส่งเฉพาะบรรทัดผิดปกติออกไปและใช้ Groq quota</p><button disabled={busy} onClick={() => runAiRepair("cloud")} className="secondary-button mt-3 w-full">ซ่อมด้วย Cloud AI</button></div>
           </div>
-          <p className="mt-2 text-xs text-amber-700">{cleanerMode === "cloud" ? "โหมดนี้ส่งเฉพาะบรรทัดผิดปกติไปยัง Cloud AI และใช้ API quota" : "Local AI ไม่ส่งข้อความออกจากเครื่อง"} · AI อาจคาดเดาผิด ระบบจึงเก็บข้อความต้นฉบับไว้เสมอ</p>
+          <p className="mt-2 text-xs text-amber-700">ทั้งสองโหมดทำงานเมื่อผู้ใช้กดปุ่มเท่านั้น และอาจคาดเดาผิด กรุณาตรวจเทียบกับข้อความต้นฉบับ</p>
         </div>}
-        <div className="mb-3 flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} onClick={() => setMode(value)} className={`mode-button ${mode === value ? "mode-button-active" : ""}`}>{label}</button>)}</div>
-        {rawText && <div className="mb-3 flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-xs"><button onClick={() => setView("cleaned")} className={`tab-button ${view === "cleaned" ? "tab-button-active" : ""}`}>ข้อความจัดเรียงแล้ว</button><button onClick={() => setView("raw")} className={`tab-button ${view === "raw" ? "tab-button-active" : ""}`}>ข้อความต้นฉบับ</button>{summary && <button onClick={() => setView("summary")} className={`tab-button ${view === "summary" ? "tab-button-active" : ""}`}>ผลสรุป</button>}</div>}
+        <div className="mb-3 flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} disabled={busy || text.length < 50} onClick={() => summarize(value)} className="mode-button">{label}</button>)}</div>
+        {rawText && <div className="mb-3 flex w-fit max-w-full flex-wrap gap-1 rounded-xl bg-slate-100 p-1 text-xs">{summary && <button onClick={() => setView("summary")} className={`tab-button ${view === "summary" ? "tab-button-active" : ""}`}>{summaryMode === "key_points" ? "สรุปประเด็นสำคัญแล้ว" : summaryMode === "short_summary" ? "ผลสรุปย่อ" : "สิ่งที่ต้องทำ"}</button>}<button onClick={() => setView("cleaned")} className={`tab-button ${view === "cleaned" ? "tab-button-active" : ""}`}>ข้อความจัดเรียงแล้ว</button><button onClick={() => setView("raw")} className={`tab-button ${view === "raw" ? "tab-button-active" : ""}`}>ข้อความต้นฉบับ</button></div>}
         <textarea aria-label="Extracted PDF text" readOnly={view === "raw"} className="document-editor min-h-56 flex-1 resize-none rounded-2xl p-4 text-sm leading-7 outline-none" value={visibleText} onChange={(event) => view === "summary" ? setSummary(event.target.value) : setText(event.target.value)} placeholder="เลือกหน้าที่ต้องการอ่าน แล้วข้อความจาก PDF จะแสดงที่นี่" />
         <div className="mt-3 flex flex-wrap gap-2">
-          <button disabled={busy || text.length < 50} onClick={summarize} className="dark-button">สรุปเอกสาร</button>
           <button disabled={!visibleText} onClick={() => navigator.clipboard.writeText(visibleText)} className="secondary-button">คัดลอก</button>
           <button disabled={!visibleText || !file} onClick={() => file && exportAsTxt(visibleText, file.name)} className="secondary-button">Export .txt</button>
           <button disabled={!visibleText || !file} onClick={() => file && exportAsDocx(visibleText, file.name)} className="secondary-button">Export .docx</button>
           {url && <button onClick={reset} className="secondary-button ml-auto">เปลี่ยนไฟล์</button>}
         </div>
       </section>
-    </div>
-    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · ส่งเฉพาะบรรทัดผิดปกติให้ Cloud AI ซ่อมข้อความ</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong></span></footer>
+    </div>}
+    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · Cloud repair ทำงานเมื่อผู้ใช้เลือกเท่านั้น</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong></span></footer>
   </main>;
 }
