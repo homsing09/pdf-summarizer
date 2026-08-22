@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
-import { localAiErrorMessage, repairTextLocally } from "@/lib/ai/local-cleaner";
+import { localAiErrorMessage } from "@/lib/ai/local-ai-error";
 import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
 import { extractPdfText, getPdfPageCount } from "@/lib/pdf/extract-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
@@ -86,7 +86,7 @@ export function Workspace() {
     try {
       const repaired = cleanerMode === "cloud"
         ? await repairTextInCloud(text, "auto")
-        : await repairTextLocally(text, repairMode, setStatus);
+        : await (await import("@/lib/ai/local-cleaner")).repairTextLocally(text, repairMode, setStatus);
       setText(repaired); setView("cleaned"); setSummary("");
       setStatus(`${cleanerMode === "cloud" ? "AI สำหรับมือถือ" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
     } catch (error) {

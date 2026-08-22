@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localAiErrorMessage } from "../lib/ai/local-cleaner";
+import { localAiErrorMessage } from "../lib/ai/local-ai-error";
 
 describe("localAiErrorMessage", () => {
   it("preserves useful WebGPU errors", () => expect(localAiErrorMessage(new Error("Browser ไม่รองรับ WebGPU"))).toContain("WebGPU"));
