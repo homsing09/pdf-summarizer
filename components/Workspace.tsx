@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
 import { localAiErrorMessage } from "@/lib/ai/local-ai-error";
 import { summarizeKeyPointsLocally } from "@/lib/ai/local-summary";
-import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
 import { extractPdfText, getPdfPageCount, hasUsableText } from "@/lib/pdf/extract-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
 import { runOcrFallbackPages } from "@/lib/pdf/ocr-fallback";
@@ -13,7 +12,7 @@ import type { SummaryMode } from "@/lib/validation/summarize.schema";
 import { PdfViewer } from "./PdfViewer";
 import { UploadZone } from "./UploadZone";
 
-const modes: Array<[SummaryMode, string]> = [["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
+const modes: Array<[SummaryMode, string]> = [["key_points", "อ่านด้วย Cloud AI"], ["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_PAGES_PER_RUN = 50;
 type TextView = "cleaned" | "raw" | "summary";
@@ -31,6 +30,7 @@ export function Workspace() {
   const [summary, setSummary] = useState("");
   const [view, setView] = useState<TextView>("cleaned");
   const [summaryMode, setSummaryMode] = useState<SummaryMode>("key_points");
+  const [summarySource, setSummarySource] = useState("Local Smart");
   const isMobile = useSyncExternalStore(
     () => () => undefined,
     () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia("(pointer: coarse)").matches,
@@ -96,7 +96,7 @@ export function Workspace() {
       setProgress(85);
       try {
         const keyPoints = summarizeKeyPointsLocally(cleanedResult);
-        setSummary(keyPoints); setSummaryMode("key_points"); setView("summary");
+        setSummary(keyPoints); setSummaryMode("key_points"); setSummarySource("Local Smart"); setView("summary");
         setProgress(100); setStatus(`อ่านและสรุปภายในเครื่องสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}`);
       } catch (error) {
         setStatus(`${error instanceof Error ? error.message : "สรุปประเด็นสำคัญไม่สำเร็จ"} · ข้อความจัดเรียงแล้วยังใช้งานได้${note}`);
@@ -105,35 +105,33 @@ export function Workspace() {
     finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
 
-  async function requestSummary(sourceText: string, requestedMode: SummaryMode, signal?: AbortSignal): Promise<string> {
+  async function requestSummary(sourceText: string, requestedMode: SummaryMode, signal?: AbortSignal): Promise<{ summary: string; provider: string }> {
     const response = await fetch("/api/summarize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: sourceText, mode: requestedMode }), signal });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? "Request failed");
-    return data.summary;
+    return { summary: data.summary, provider: data.provider ?? "Cloud AI" };
   }
 
   async function summarize(requestedMode: SummaryMode) {
     const controller = new AbortController(); activeController.current = controller; setCanCancel(true);
     setBusy(true); setProgress(15); setStatus("กำลังสรุป…"); setSummary("");
     try {
-      setSummary(await requestSummary(text, requestedMode, controller.signal)); setSummaryMode(requestedMode); setView("summary"); setProgress(100); setStatus("สรุปเรียบร้อย");
+      const result = await requestSummary(text, requestedMode, controller.signal); setSummary(result.summary); setSummarySource(result.provider); setSummaryMode(requestedMode); setView("summary"); setProgress(100); setStatus(`สรุปเรียบร้อยด้วย ${result.provider}`);
     } catch (error) { setStatus(error instanceof DOMException && error.name === "AbortError" ? "ยกเลิกการสรุปแล้ว" : error instanceof Error ? error.message : "สรุปไม่สำเร็จ"); }
     finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
 
-  async function runAiRepair(provider: "local" | "cloud") {
+  async function summarizeWithAdvancedLocalAi() {
     if (!text) return;
     const controller = new AbortController(); activeController.current = controller; setCanCancel(true);
     setBusy(true); setProgress(10);
     try {
-      const repaired = provider === "cloud"
-        ? await repairTextInCloud(text, "auto", controller.signal)
-        : await (await import("@/lib/ai/local-cleaner")).repairTextLocally(text, "auto", setStatus);
+      const result = await (await import("@/lib/ai/local-llm-summary")).summarizeWithLocalAi(text, setStatus);
       if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-      setText(repaired); setView("cleaned"); setSummary(""); setProgress(100);
-      setStatus(`${provider === "cloud" ? "Cloud AI" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
+      setSummary(result); setSummaryMode("key_points"); setSummarySource("Local AI ขั้นสูง"); setView("summary"); setProgress(100);
+      setStatus("Local AI ขั้นสูงสรุปเรียบร้อย — กรุณาตรวจเทียบกับต้นฉบับ");
     } catch (error) {
-      setStatus(provider === "cloud" ? (error instanceof Error ? error.message : "Cloud AI ทำงานไม่สำเร็จ") : localAiErrorMessage(error));
+      setStatus(localAiErrorMessage(error));
     } finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
 
@@ -171,15 +169,8 @@ export function Workspace() {
             <button disabled={busy || !totalPages} onClick={readSelectedPages} className="primary-button ml-auto">{busy ? "กำลังทำงาน…" : "อ่านหน้าที่เลือก"}</button>
           </div>
         </div>}
-        {text && <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
-          <div className="mb-3"><p className="font-semibold text-slate-900">ปรับความสมบูรณ์ของข้อความ (เลือกใช้เมื่อจำเป็น)</p><p className="text-xs text-slate-600">ระบบจัดเรียงมาตรฐานทำงานให้แล้วอัตโนมัติ โดยไม่ใช้ AI และไม่ส่งข้อมูลออกจากเครื่อง</p></div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="rounded-xl border border-violet-100 bg-white p-3"><p className="text-sm font-semibold">Local AI · แนะนำสำหรับ PC</p><p className="mt-1 text-xs text-slate-600">ข้อดี: เป็นส่วนตัว ไม่ใช้ API quota · ข้อเสีย: ดาวน์โหลดประมาณ 1 GB ใช้ RAM/GPU สูง และไม่เหมาะกับมือถือ</p><button disabled={busy || isMobile} onClick={() => runAiRepair("local")} className="primary-button mt-3 w-full">{isMobile ? "ใช้ไม่ได้บนอุปกรณ์นี้" : "ซ่อมด้วย Local AI"}</button></div>
-            <div className="rounded-xl border border-violet-100 bg-white p-3"><p className="text-sm font-semibold">Cloud AI · PC / iOS / Android</p><p className="mt-1 text-xs text-slate-600">ข้อดี: ไม่ดาวน์โหลดโมเดลและทำงานบนมือถือ · ข้อเสีย: ส่งเฉพาะบรรทัดผิดปกติออกไปและใช้ Groq quota</p><button disabled={busy} onClick={() => runAiRepair("cloud")} className="secondary-button mt-3 w-full">ซ่อมด้วย Cloud AI</button></div>
-          </div>
-          <p className="mt-2 text-xs text-amber-700">ทั้งสองโหมดทำงานเมื่อผู้ใช้กดปุ่มเท่านั้น และอาจคาดเดาผิด กรุณาตรวจเทียบกับข้อความต้นฉบับ</p>
-        </div>}
-        <div className="mb-3"><div className="flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} disabled={busy || text.length < 50} onClick={() => summarize(value)} className="mode-button">{label}</button>)}</div>{text && <p className="mt-2 text-xs text-slate-500">ปุ่มสรุปย่อและสิ่งที่ต้องทำใช้ Cloud AI เมื่อคุณกดเลือก และจะส่งข้อความที่จัดเรียงแล้วไปยัง Groq</p>}</div>
+        {text && <div className="mb-3 rounded-2xl border border-violet-100 bg-violet-50/60 p-4"><p className="font-semibold text-slate-900">เลือกอ่านเอกสารเพิ่มเติมเมื่อผล Local Smart ยังไม่เพียงพอ</p><p className="mt-1 text-xs text-slate-600">Local AI ขั้นสูงดาวน์โหลดโมเดลและเหมาะกับ PC ที่รองรับ WebGPU ส่วน Cloud AI ส่งข้อความไปยัง Groq หรือ Gemini</p><div className="mt-3 flex flex-wrap gap-2"><button disabled={busy || isMobile} onClick={summarizeWithAdvancedLocalAi} className="primary-button">{isMobile ? "Local AI ขั้นสูงใช้ไม่ได้บนอุปกรณ์นี้" : "อ่านด้วย Local AI ขั้นสูง"}</button>{modes.map(([value, label]) => <button key={value} disabled={busy || text.length < 50} onClick={() => summarize(value)} className="mode-button">{label}</button>)}</div></div>}
+        {rawText && <p className="mb-2 text-xs font-semibold text-fuchsia-700">ผลจาก {summarySource}</p>}
         {rawText && <div className="mb-3 flex w-fit max-w-full flex-wrap gap-1 rounded-xl bg-slate-100 p-1 text-xs">{summary && <button onClick={() => setView("summary")} className={`tab-button ${view === "summary" ? "tab-button-active" : ""}`}>{summaryMode === "key_points" ? "สรุปประเด็นสำคัญแล้ว" : summaryMode === "short_summary" ? "ผลสรุปย่อ" : "สิ่งที่ต้องทำ"}</button>}<button onClick={() => setView("cleaned")} className={`tab-button ${view === "cleaned" ? "tab-button-active" : ""}`}>ข้อความจัดเรียงแล้ว</button><button onClick={() => setView("raw")} className={`tab-button ${view === "raw" ? "tab-button-active" : ""}`}>ข้อความต้นฉบับ</button></div>}
         <textarea aria-label="Extracted PDF text" readOnly={view === "raw"} className="document-editor min-h-56 flex-1 resize-none rounded-2xl p-4 text-sm leading-7 outline-none" value={visibleText} onChange={(event) => view === "summary" ? setSummary(event.target.value) : setText(event.target.value)} placeholder="เลือกหน้าที่ต้องการอ่าน แล้วข้อความจาก PDF จะแสดงที่นี่" />
         <div className="mt-3 flex flex-wrap gap-2">

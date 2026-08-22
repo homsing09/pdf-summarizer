@@ -12,7 +12,7 @@ async function fixturePdf(): Promise<Buffer> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/summarize", async (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ summary: "- Main operational result\n- Follow up next month" }) }));
+  await page.route("**/api/summarize", async (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ summary: "- Main operational result\n- Follow up next month", provider: "Groq" }) }));
 });
 
 test("uploads, selects pages, summarizes, changes theme and exports", async ({ page }) => {

@@ -1,6 +1,6 @@
 # PDF Summarizer
 
-Next.js App Router application that extracts PDF text in the browser, falls back to Tesseract OCR in a Web Worker, and sends only extracted text to a server-only Groq integration.
+Next.js App Router application that extracts PDF text in the browser, falls back to Tesseract OCR in a Web Worker, summarizes locally by default, and uses server-only Groq → Gemini failover when Cloud AI is explicitly selected.
 
 ## Local development
 
@@ -23,7 +23,7 @@ The summarize route explicitly uses the Node.js runtime. No database, cache, or 
 ## Safety and operating limits
 
 - PDF processing and OCR run in the browser. Files are limited to 25 MB and a maximum of 50 selected pages per run.
-- Cloud summarization accepts at most 120,000 characters. Cloud text repair accepts 20 bounded chunks per request.
+- Cloud summarization accepts at most 120,000 characters. Text repair modes and their API route have been removed.
 - API routes have sanitized errors, provider timeouts, request-size guards, and best-effort per-instance rate limits.
-- Before production, configure Vercel Firewall rate limiting for `/api/summarize` and `/api/repair-text`; an in-memory limiter cannot enforce a global quota across serverless instances.
-- Cloud features send extracted text to Groq only when invoked. Do not place `GROQ_API_KEY` in source, chat, or any `NEXT_PUBLIC_` variable.
+- Before production, configure Vercel Firewall rate limiting for `/api/summarize`; an in-memory limiter cannot enforce a global quota across serverless instances.
+- Cloud features try Groq first and fail over to Gemini only for unavailable credentials, quota, timeout, capacity, or provider errors. Do not place either API key in source, chat, or any `NEXT_PUBLIC_` variable.

@@ -13,10 +13,10 @@ export async function POST(request: Request) {
   catch (error) { return NextResponse.json({ error: error instanceof RangeError ? "Request body is too large" : "Invalid JSON body" }, { status: error instanceof RangeError ? 413 : 400, headers }); }
   const parsed = summarizeSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400, headers });
-  try { return NextResponse.json({ summary: await withTimeout((signal) => summarizeDocument(parsed.data, signal)) }, { headers }); }
+  try { return NextResponse.json(await withTimeout((signal) => summarizeDocument(parsed.data, signal)), { headers }); }
   catch (error) {
     console.error("Summarization failed", error instanceof Error ? error.message : "Unknown error");
-    const missingConfig = error instanceof Error && error.message.includes("GROQ_API_KEY");
+    const missingConfig = error instanceof Error && error.message.includes("API_KEY is not configured");
     return NextResponse.json({ error: missingConfig ? "AI service is not configured" : "Unable to summarize document" }, { status: missingConfig ? 503 : 502, headers });
   }
 }
