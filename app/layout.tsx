@@ -19,7 +19,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="th"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('pdf-summarizer-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){}})()` }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

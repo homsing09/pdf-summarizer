@@ -14,6 +14,7 @@ import { UploadZone } from "./UploadZone";
 
 const modes: Array<[SummaryMode, string]> = [["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
 type TextView = "cleaned" | "raw" | "summary";
+type Theme = "light" | "dark";
 
 export function Workspace() {
   const [file, setFile] = useState<File | null>(null);
@@ -34,8 +35,13 @@ export function Workspace() {
   );
   const [status, setStatus] = useState("พร้อมเริ่มงาน");
   const [busy, setBusy] = useState(false);
+  const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light"));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const visibleText = useMemo(() => view === "summary" ? summary : view === "raw" ? rawText : text, [view, summary, rawText, text]);
 
   async function load(nextFile: File) {
@@ -123,10 +129,18 @@ export function Workspace() {
     setFile(null); setUrl(null); setTotalPages(0); setRawText(""); setText(""); setSummary(""); setView("cleaned"); setStatus("พร้อมเริ่มงาน");
   }
 
+  function toggleTheme() {
+    const nextTheme: Theme = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = nextTheme;
+    document.documentElement.style.colorScheme = nextTheme;
+    localStorage.setItem("pdf-summarizer-theme", nextTheme);
+    setTheme(nextTheme);
+  }
+
   return <main className="mx-auto flex min-h-screen max-w-[1680px] flex-col px-4 py-5 md:px-7">
     <header className="document-header mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
       <div className="flex items-center gap-3"><div className="brand-mark">D</div><div><p className="text-[11px] font-bold tracking-[0.22em] text-fuchsia-700">DIGITAL DOCUMENT WORKSPACE</p><h1 className="text-2xl font-bold tracking-tight text-slate-900">PDF Summarizer</h1></div></div>
-      <div className="text-right"><p className="text-sm font-medium text-slate-700">{status}</p><p className="mt-1 text-xs text-slate-500">ประมวลผล PDF และ OCR ภายใน browser</p></div>
+      <div className="flex items-center gap-3"><div className="text-right"><p className="text-sm font-medium text-slate-700">{status}</p><p className="mt-1 text-xs text-slate-500">ประมวลผล PDF และ OCR ภายใน browser</p></div><button type="button" onClick={toggleTheme} className="theme-toggle" aria-label={theme === "dark" ? "เปลี่ยนเป็นโหมดสว่าง" : "เปลี่ยนเป็นโหมดมืด"} aria-pressed={theme === "dark"}><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span><span>{theme === "dark" ? "โหมดสว่าง" : "โหมดมืด"}</span></button></div>
     </header>
     {!url && <section className="paper-panel mb-5 p-5 md:p-8"><UploadZone onFile={load} /></section>}
     {url && <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(430px,.95fr)]">
