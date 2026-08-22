@@ -9,4 +9,12 @@ describe("sanitizeModelOutput", () => {
   it("leaves normal summaries unchanged", () => {
     expect(sanitizeModelOutput("A concise summary.")).toBe("A concise summary.");
   });
+
+  it("removes an unterminated reasoning block", () => {
+    expect(sanitizeModelOutput("<think>private reasoning without a closing tag")).toBe("");
+  });
+
+  it("removes a stray closing tag without losing the answer", () => {
+    expect(sanitizeModelOutput("Final summary</think>")).toBe("Final summary");
+  });
 });

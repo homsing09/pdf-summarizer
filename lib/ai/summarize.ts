@@ -9,7 +9,7 @@ export async function summarizeDocument(input: SummarizeInput): Promise<string> 
   const client = getGroqClient();
   const partials: string[] = [];
   for (const chunk of chunks) {
-    const response = await client.chat.completions.create({ model: GROQ_MODEL, temperature: 0.2, messages: [
+    const response = await client.chat.completions.create({ model: GROQ_MODEL, temperature: 0.2, reasoning_effort: "none", reasoning_format: "hidden", messages: [
       { role: "system", content: "Summarize faithfully. Reply in the document's primary language." },
       { role: "user", content: buildPrompt(input.mode, chunk) },
     ]});
@@ -19,7 +19,7 @@ export async function summarizeDocument(input: SummarizeInput): Promise<string> 
     partials.push(content);
   }
   if (partials.length === 1) return partials[0];
-  const merged = await client.chat.completions.create({ model: GROQ_MODEL, temperature: 0.1, messages: [{ role: "user", content: buildPrompt(input.mode, partials.join("\n\n---\n\n")) }] });
+  const merged = await client.chat.completions.create({ model: GROQ_MODEL, temperature: 0.1, reasoning_effort: "none", reasoning_format: "hidden", messages: [{ role: "user", content: buildPrompt(input.mode, partials.join("\n\n---\n\n")) }] });
   const rawContent = merged.choices[0]?.message.content;
   const content = rawContent ? sanitizeModelOutput(rawContent) : "";
   if (!content) throw new Error("AI provider returned an empty response");
