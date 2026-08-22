@@ -2,6 +2,7 @@ import "server-only";
 import { chunkText } from "./chunk-text";
 import { getGroqClient, GROQ_MODEL } from "./groq.server";
 import { buildPrompt } from "./prompts";
+import { sanitizeModelOutput } from "./sanitize-output";
 import type { SummarizeInput } from "@/lib/validation/summarize.schema";
 export async function summarizeDocument(input: SummarizeInput): Promise<string> {
   const chunks = chunkText(input.text);
@@ -12,13 +13,15 @@ export async function summarizeDocument(input: SummarizeInput): Promise<string> 
       { role: "system", content: "Summarize faithfully. Reply in the document's primary language." },
       { role: "user", content: buildPrompt(input.mode, chunk) },
     ]});
-    const content = response.choices[0]?.message.content?.trim();
+    const rawContent = response.choices[0]?.message.content;
+    const content = rawContent ? sanitizeModelOutput(rawContent) : "";
     if (!content) throw new Error("AI provider returned an empty response");
     partials.push(content);
   }
   if (partials.length === 1) return partials[0];
   const merged = await client.chat.completions.create({ model: GROQ_MODEL, temperature: 0.1, messages: [{ role: "user", content: buildPrompt(input.mode, partials.join("\n\n---\n\n")) }] });
-  const content = merged.choices[0]?.message.content?.trim();
+  const rawContent = merged.choices[0]?.message.content;
+  const content = rawContent ? sanitizeModelOutput(rawContent) : "";
   if (!content) throw new Error("AI provider returned an empty response");
   return content;
 }
