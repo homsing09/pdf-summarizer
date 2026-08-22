@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
 import { localAiErrorMessage } from "@/lib/ai/local-ai-error";
 import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
-import { extractPdfText, getPdfPageCount } from "@/lib/pdf/extract-text";
+import { extractPdfText, getPdfPageCount, hasUsableText } from "@/lib/pdf/extract-text";
+import { selectTextForLocalRepair } from "@/lib/pdf/detect-noisy-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
-import { runOcrFallback } from "@/lib/pdf/ocr-fallback";
+import { runOcrFallbackPages } from "@/lib/pdf/ocr-fallback";
 import { createPageRange } from "@/lib/pdf/page-selection";
 import type { SummaryMode } from "@/lib/validation/summarize.schema";
 import { PdfViewer } from "./PdfViewer";
@@ -56,14 +57,30 @@ export function Workspace() {
     setBusy(true); setStatus("กำลังอ่านและจัดเรียงข้อความ…");
     try {
       const pages = selection === "all" ? createPageRange(1, totalPages, totalPages) : createPageRange(fromPage, toPage, totalPages);
-      let extracted = await extractPdfText(file, pages);
-      if (extracted.cleanedText.length < 50) {
-        setStatus(`ไม่พบ text layer ใน ${pages.length} หน้า — กำลัง OCR ใน browser…`);
-        const ocrText = await runOcrFallback(file, pages);
-        extracted = { rawText: ocrText, cleanedText: normalizeExtractedText(ocrText) };
+      const extracted = await extractPdfText(file, pages);
+      const rawPages = [...extracted.rawPages];
+      const cleanedPages = [...extracted.cleanedPages];
+      const weakIndexes = cleanedPages.flatMap((pageText, index) => hasUsableText(pageText) ? [] : [index]);
+      let note = "";
+      if (weakIndexes.length) {
+        setStatus(`พบ ${weakIndexes.length} หน้าที่ไม่มี text layer — กำลัง OCR ใน browser…`);
+        try {
+          const ocrTexts = await runOcrFallbackPages(file, weakIndexes.map((index) => pages[index]));
+          weakIndexes.forEach((pageIndex, resultIndex) => {
+            const ocrText = ocrTexts[resultIndex]?.trim() ?? "";
+            if (ocrText) { rawPages[pageIndex] = ocrText; cleanedPages[pageIndex] = normalizeExtractedText(ocrText); }
+          });
+        } catch { note = " · OCR บางหน้าไม่สำเร็จ"; }
       }
-      setRawText(extracted.rawText); setText(extracted.cleanedText); setSummary(""); setView("cleaned");
-      setStatus(extracted.cleanedText.length >= 50 ? `อ่านสำเร็จ ${pages.length} จาก ${totalPages} หน้า` : "ไม่พบข้อความที่เพียงพอในหน้าที่เลือก");
+      const rawResult = rawPages.join("\n\n").trim();
+      let cleanedResult = cleanedPages.join("\n\n").trim();
+      if (selectTextForLocalRepair(cleanedResult, "auto").length) {
+        setStatus("พบอักขระผิดปกติ — กำลังแก้ความสมบูรณ์ของข้อความ…");
+        try { cleanedResult = await repairTextInCloud(cleanedResult, "auto"); }
+        catch { note += " · AI แก้อักขระไม่สำเร็จ (ยังใช้ข้อความมาตรฐานได้)"; }
+      }
+      setRawText(rawResult); setText(cleanedResult); setSummary(""); setView("cleaned");
+      setStatus(hasUsableText(cleanedResult) ? `อ่านและตรวจข้อความสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}` : `ไม่พบข้อความที่เพียงพอในหน้าที่เลือก${note}`);
     } catch (error) { setStatus(error instanceof Error ? error.message : "อ่าน PDF ไม่สำเร็จ กรุณาลองใหม่"); }
     finally { setBusy(false); }
   }
@@ -140,6 +157,6 @@ export function Workspace() {
         </div>
       </section>
     </div>
-    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>เอกสารของคุณไม่ถูกอัปโหลดระหว่างการอ่านข้อความ</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong></span></footer>
+    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · ส่งเฉพาะบรรทัดผิดปกติให้ Cloud AI ซ่อมข้อความ</span><span>Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong></span></footer>
   </main>;
 }

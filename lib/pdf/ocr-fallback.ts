@@ -1,6 +1,6 @@
 import { ensurePdfMobileCompatibility } from "./mobile-compat";
 
-export async function runOcrFallback(file: File, pageNumbers?: number[]): Promise<string> {
+export async function runOcrFallbackPages(file: File, pageNumbers?: number[]): Promise<string[]> {
   ensurePdfMobileCompatibility();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
@@ -21,12 +21,16 @@ export async function runOcrFallback(file: File, pageNumbers?: number[]): Promis
   }
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("../../workers/ocr.worker.ts", import.meta.url));
-    worker.onmessage = (event: MessageEvent<{ text?: string; error?: string }>) => {
+    worker.onmessage = (event: MessageEvent<{ texts?: string[]; error?: string }>) => {
       worker.terminate();
       if (event.data.error) reject(new Error(event.data.error));
-      else resolve(event.data.text ?? "");
+      else resolve(event.data.texts ?? []);
     };
     worker.onerror = () => { worker.terminate(); reject(new Error("OCR worker failed")); };
     worker.postMessage({ images });
   });
+}
+
+export async function runOcrFallback(file: File, pageNumbers?: number[]): Promise<string> {
+  return (await runOcrFallbackPages(file, pageNumbers)).join("\n\n");
 }

@@ -4,6 +4,8 @@ import { isNoisyLine, replaceSelectedLines, selectTextForLocalRepair } from "../
 describe("noisy text detection", () => {
   it("detects isolated Thai characters caused by broken spacing", () => expect(isNoisyLine("เร ี ย น ผู ้ อ ํ า น ว ย ก า ร")).toBe(true));
   it("keeps normal Thai text", () => expect(isNoisyLine("เรียน ผู้อำนวยการ การไฟฟ้าส่วนภูมิภาค")).toBe(false));
+  it("detects a foreign glyph embedded in Thai text", () => expect(isNoisyLine("ขอเชิญประชุมผู้บริĀารประจำเดือน")).toBe(true));
+  it("detects a Thai vowel separated from its consonant", () => expect(isNoisyLine("ขอเชิญประชุมประจ าเดือน")).toBe(true));
   it("selects only suspicious lines in auto mode", () => {
     expect(selectTextForLocalRepair("ข้อความปกติ\nเร ี ย น ผู ้ อ ํ า น ว ย ก า ร", "auto")).toEqual(["เร ี ย น ผู ้ อ ํ า น ว ย ก า ร"]);
   });

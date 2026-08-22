@@ -2,7 +2,11 @@ import { normalizeExtractedText } from "./normalize-text";
 import { reconstructLines, type PositionedText } from "./reconstruct-lines";
 import { ensurePdfMobileCompatibility } from "./mobile-compat";
 
-export type ExtractedPdfText = { rawText: string; cleanedText: string };
+export type ExtractedPdfText = { rawText: string; cleanedText: string; rawPages: string[]; cleanedPages: string[] };
+
+export function hasUsableText(text: string): boolean {
+  return (text.match(/[\p{L}\p{N}]/gu) ?? []).length >= 10;
+}
 
 export async function getPdfPageCount(file: File): Promise<number> {
   ensurePdfMobileCompatibility();
@@ -35,5 +39,6 @@ export async function extractPdfText(file: File, pageNumbers?: number[]): Promis
     pages.push(reconstructLines(items));
   }
   const rawText = pages.join("\n\n").trim();
-  return { rawText, cleanedText: normalizeExtractedText(rawText) };
+  const cleanedPages = pages.map(normalizeExtractedText);
+  return { rawText, cleanedText: cleanedPages.join("\n\n").trim(), rawPages: pages, cleanedPages };
 }

@@ -1,4 +1,4 @@
-const THAI_MARKS = "\u0E31\u0E34-\u0E3A\u0E47-\u0E4E";
+const THAI_MARKS = "\u0E31\u0E33-\u0E3A\u0E47-\u0E4E";
 const THAI_TOKEN = /^[\u0E00-\u0E7F]+$/u;
 
 function isFragmentedThaiLine(line: string): boolean {

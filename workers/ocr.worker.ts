@@ -4,7 +4,7 @@ self.onmessage = async (event: MessageEvent<{ images: string[] }>) => {
   try {
     const text: string[] = [];
     for (const image of event.data.images) text.push((await worker.recognize(image)).data.text);
-    self.postMessage({ text: text.join("\n\n") });
+    self.postMessage({ texts: text });
   } catch (error) { self.postMessage({ error: error instanceof Error ? error.message : "OCR failed" }); }
   finally { await worker.terminate(); }
 };
