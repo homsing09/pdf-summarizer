@@ -57,6 +57,16 @@ export async function runOcrFallbackPages(
       const canvasContext = canvas.getContext("2d", { alpha: false });
       if (!canvasContext) throw new Error("Canvas is unavailable");
       await page.render({ canvas, canvasContext, viewport, background: "#ffffff" }).promise;
+      // Some scanned PDFs resolve their page image immediately after the
+      // first render task. A second pass paints the now-cached image instead
+      // of sending a blank canvas to OCR.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      canvasContext.save();
+      canvasContext.setTransform(1, 0, 0, 1, 0, 0);
+      canvasContext.fillStyle = "#ffffff";
+      canvasContext.fillRect(0, 0, canvas.width, canvas.height);
+      canvasContext.restore();
+      await page.render({ canvas, canvasContext, viewport, background: "#ffffff" }).promise;
       texts.push((await worker.recognize(canvas)).data.text);
       canvas.width = 0;
       canvas.height = 0;
