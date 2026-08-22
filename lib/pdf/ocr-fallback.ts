@@ -1,4 +1,7 @@
+import { ensurePdfMobileCompatibility } from "./mobile-compat";
+
 export async function runOcrFallback(file: File, pageNumbers?: number[]): Promise<string> {
+  ensurePdfMobileCompatibility();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;

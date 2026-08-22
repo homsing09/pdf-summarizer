@@ -1,9 +1,11 @@
 import { normalizeExtractedText } from "./normalize-text";
 import { reconstructLines, type PositionedText } from "./reconstruct-lines";
+import { ensurePdfMobileCompatibility } from "./mobile-compat";
 
 export type ExtractedPdfText = { rawText: string; cleanedText: string };
 
 export async function getPdfPageCount(file: File): Promise<number> {
+  ensurePdfMobileCompatibility();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -11,6 +13,7 @@ export async function getPdfPageCount(file: File): Promise<number> {
 }
 
 export async function extractPdfText(file: File, pageNumbers?: number[]): Promise<ExtractedPdfText> {
+  ensurePdfMobileCompatibility();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
