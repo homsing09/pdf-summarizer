@@ -5,6 +5,27 @@ type OcrOptions = {
   onProgress?: (completed: number, total: number) => void;
 };
 
+type PdfObjectStore = {
+  get: (id: string, callback: (value: unknown) => void) => unknown;
+};
+
+async function waitForPageImages(
+  page: unknown,
+  operatorList: { fnArray: number[]; argsArray: unknown[][] },
+  imageOperationIds: ReadonlySet<number>,
+): Promise<void> {
+  const stores = page as { objs: PdfObjectStore; commonObjs: PdfObjectStore };
+  const imageIds = operatorList.fnArray.flatMap((operation, index) => {
+    if (!imageOperationIds.has(operation)) return [];
+    const id = operatorList.argsArray[index]?.[0];
+    return typeof id === "string" ? [id] : [];
+  });
+  await Promise.all([...new Set(imageIds)].map((id) => new Promise<void>((resolve) => {
+    const store = id.startsWith("g_") ? stores.commonObjs : stores.objs;
+    store.get(id, () => resolve());
+  })));
+}
+
 async function createOcrWorker(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const { createWorker } = await import("tesseract.js");
@@ -50,22 +71,17 @@ export async function runOcrFallbackPages(
         throw new Error("Selected PDF page is out of range");
       }
       const page = await pdf.getPage(pageNumber);
+      const operatorList = await page.getOperatorList();
+      await waitForPageImages(page, operatorList, new Set([
+        pdfjs.OPS.paintImageXObject,
+        pdfjs.OPS.paintImageXObjectRepeat,
+      ]));
       const viewport = page.getViewport({ scale: 1.5 });
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
       const canvasContext = canvas.getContext("2d", { alpha: false });
       if (!canvasContext) throw new Error("Canvas is unavailable");
-      await page.render({ canvas, canvasContext, viewport, background: "#ffffff" }).promise;
-      // Some scanned PDFs resolve their page image immediately after the
-      // first render task. A second pass paints the now-cached image instead
-      // of sending a blank canvas to OCR.
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      canvasContext.save();
-      canvasContext.setTransform(1, 0, 0, 1, 0, 0);
-      canvasContext.fillStyle = "#ffffff";
-      canvasContext.fillRect(0, 0, canvas.width, canvas.height);
-      canvasContext.restore();
       await page.render({ canvas, canvasContext, viewport, background: "#ffffff" }).promise;
       texts.push((await worker.recognize(canvas)).data.text);
       canvas.width = 0;
