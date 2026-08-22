@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored PDF.js decoder assets are generated upstream.
+    "public/pdfjs/wasm/**",
   ]),
 ]);
 

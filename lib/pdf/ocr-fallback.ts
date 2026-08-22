@@ -50,6 +50,7 @@ export async function runOcrFallbackPages(
   ).toString();
   const pdf = await pdfjs.getDocument({
     data: await file.arrayBuffer(),
+    wasmUrl: "/pdfjs/wasm/",
     // Avoid asynchronous decoder paths that can leave scanned page images
     // unresolved when the OCR canvas is rendered in some browsers.
     isImageDecoderSupported: false,
