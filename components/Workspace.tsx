@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
 import { localAiErrorMessage } from "@/lib/ai/local-ai-error";
+import { summarizeKeyPointsLocally } from "@/lib/ai/local-summary";
 import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
 import { extractPdfText, getPdfPageCount, hasUsableText } from "@/lib/pdf/extract-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
@@ -13,6 +14,8 @@ import { PdfViewer } from "./PdfViewer";
 import { UploadZone } from "./UploadZone";
 
 const modes: Array<[SummaryMode, string]> = [["short_summary", "สรุปย่อ"], ["action_items", "สิ่งที่ต้องทำ"]];
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_PAGES_PER_RUN = 50;
 type TextView = "cleaned" | "raw" | "summary";
 type Theme = "light" | "dark";
 
@@ -35,6 +38,9 @@ export function Workspace() {
   );
   const [status, setStatus] = useState("พร้อมเริ่มงาน");
   const [busy, setBusy] = useState(false);
+  const [canCancel, setCanCancel] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const activeController = useRef<AbortController | null>(null);
   const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
@@ -45,6 +51,7 @@ export function Workspace() {
   const visibleText = useMemo(() => view === "summary" ? summary : view === "raw" ? rawText : text, [view, summary, rawText, text]);
 
   async function load(nextFile: File) {
+    if (nextFile.size > MAX_FILE_BYTES) { setStatus("ไฟล์ใหญ่เกิน 25 MB กรุณาลดขนาดหรือแบ่งไฟล์"); return; }
     if (url) URL.revokeObjectURL(url);
     setFile(nextFile); setUrl(URL.createObjectURL(nextFile)); setBusy(true); setStatus("กำลังตรวจจำนวนหน้า…");
     setRawText(""); setText(""); setSummary(""); setView("cleaned");
@@ -58,10 +65,12 @@ export function Workspace() {
 
   async function readSelectedPages() {
     if (!file || !totalPages) return;
-    setBusy(true); setStatus("กำลังอ่านและจัดเรียงข้อความ…");
+    const controller = new AbortController(); activeController.current = controller; setCanCancel(true);
+    setBusy(true); setProgress(2); setStatus("กำลังอ่านและจัดเรียงข้อความ…");
     try {
       const pages = selection === "all" ? createPageRange(1, totalPages, totalPages) : createPageRange(fromPage, toPage, totalPages);
-      const extracted = await extractPdfText(file, pages);
+      if (pages.length > MAX_PAGES_PER_RUN) throw new Error(`อ่านได้สูงสุดครั้งละ ${MAX_PAGES_PER_RUN} หน้า กรุณาเลือกช่วงหน้า`);
+      const extracted = await extractPdfText(file, pages, { signal: controller.signal, onProgress: (done, total) => setProgress(Math.round((done / total) * 45)) });
       const rawPages = [...extracted.rawPages];
       const cleanedPages = [...extracted.cleanedPages];
       const weakIndexes = cleanedPages.flatMap((pageText, index) => hasUsableText(pageText) ? [] : [index]);
@@ -69,7 +78,7 @@ export function Workspace() {
       if (weakIndexes.length) {
         setStatus(`พบ ${weakIndexes.length} หน้าที่ไม่มี text layer — กำลัง OCR ใน browser…`);
         try {
-          const ocrTexts = await runOcrFallbackPages(file, weakIndexes.map((index) => pages[index]));
+          const ocrTexts = await runOcrFallbackPages(file, weakIndexes.map((index) => pages[index]), { signal: controller.signal, onProgress: (done, total) => setProgress(45 + Math.round((done / total) * 35)) });
           weakIndexes.forEach((pageIndex, resultIndex) => {
             const ocrText = ocrTexts[resultIndex]?.trim() ?? "";
             if (ocrText) { rawPages[pageIndex] = ocrText; cleanedPages[pageIndex] = normalizeExtractedText(ocrText); }
@@ -83,46 +92,52 @@ export function Workspace() {
         setStatus(`ไม่พบข้อความที่เพียงพอในหน้าที่เลือก${note}`);
         return;
       }
-      setStatus("อ่านข้อความแล้ว — กำลังสรุปประเด็นสำคัญ…");
+      setStatus("อ่านข้อความแล้ว — กำลังสรุปประเด็นสำคัญภายในเครื่อง…");
+      setProgress(85);
       try {
-        const keyPoints = await requestSummary(cleanedResult, "key_points");
+        const keyPoints = summarizeKeyPointsLocally(cleanedResult);
         setSummary(keyPoints); setSummaryMode("key_points"); setView("summary");
-        setStatus(`อ่านและสรุปสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}`);
+        setProgress(100); setStatus(`อ่านและสรุปภายในเครื่องสำเร็จ ${pages.length} จาก ${totalPages} หน้า${note}`);
       } catch (error) {
         setStatus(`${error instanceof Error ? error.message : "สรุปประเด็นสำคัญไม่สำเร็จ"} · ข้อความจัดเรียงแล้วยังใช้งานได้${note}`);
       }
-    } catch (error) { setStatus(error instanceof Error ? error.message : "อ่าน PDF ไม่สำเร็จ กรุณาลองใหม่"); }
-    finally { setBusy(false); }
+    } catch (error) { setStatus(error instanceof DOMException && error.name === "AbortError" ? "ยกเลิกการทำงานแล้ว" : error instanceof Error ? error.message : "อ่าน PDF ไม่สำเร็จ กรุณาลองใหม่"); }
+    finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
 
-  async function requestSummary(sourceText: string, requestedMode: SummaryMode): Promise<string> {
-    const response = await fetch("/api/summarize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: sourceText, mode: requestedMode }) });
+  async function requestSummary(sourceText: string, requestedMode: SummaryMode, signal?: AbortSignal): Promise<string> {
+    const response = await fetch("/api/summarize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: sourceText, mode: requestedMode }), signal });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? "Request failed");
     return data.summary;
   }
 
   async function summarize(requestedMode: SummaryMode) {
-    setBusy(true); setStatus("กำลังสรุป…"); setSummary("");
+    const controller = new AbortController(); activeController.current = controller; setCanCancel(true);
+    setBusy(true); setProgress(15); setStatus("กำลังสรุป…"); setSummary("");
     try {
-      setSummary(await requestSummary(text, requestedMode)); setSummaryMode(requestedMode); setView("summary"); setStatus("สรุปเรียบร้อย");
-    } catch (error) { setStatus(error instanceof Error ? error.message : "สรุปไม่สำเร็จ"); }
-    finally { setBusy(false); }
+      setSummary(await requestSummary(text, requestedMode, controller.signal)); setSummaryMode(requestedMode); setView("summary"); setProgress(100); setStatus("สรุปเรียบร้อย");
+    } catch (error) { setStatus(error instanceof DOMException && error.name === "AbortError" ? "ยกเลิกการสรุปแล้ว" : error instanceof Error ? error.message : "สรุปไม่สำเร็จ"); }
+    finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
 
   async function runAiRepair(provider: "local" | "cloud") {
     if (!text) return;
-    setBusy(true);
+    const controller = new AbortController(); activeController.current = controller; setCanCancel(true);
+    setBusy(true); setProgress(10);
     try {
       const repaired = provider === "cloud"
-        ? await repairTextInCloud(text, "auto")
+        ? await repairTextInCloud(text, "auto", controller.signal)
         : await (await import("@/lib/ai/local-cleaner")).repairTextLocally(text, "auto", setStatus);
-      setText(repaired); setView("cleaned"); setSummary("");
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      setText(repaired); setView("cleaned"); setSummary(""); setProgress(100);
       setStatus(`${provider === "cloud" ? "Cloud AI" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
     } catch (error) {
       setStatus(provider === "cloud" ? (error instanceof Error ? error.message : "Cloud AI ทำงานไม่สำเร็จ") : localAiErrorMessage(error));
-    } finally { setBusy(false); }
+    } finally { if (activeController.current === controller) activeController.current = null; setCanCancel(false); setBusy(false); }
   }
+
+  function cancelWork() { activeController.current?.abort(); setStatus("กำลังยกเลิก…"); }
 
   function reset() {
     if (url) URL.revokeObjectURL(url);
@@ -140,8 +155,9 @@ export function Workspace() {
   return <main className="mx-auto flex min-h-screen max-w-[1680px] flex-col px-4 py-5 md:px-7">
     <header className="document-header mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl px-5 py-4">
       <div className="flex items-center gap-3"><div className="brand-mark">D</div><div><p className="text-[11px] font-bold tracking-[0.22em] text-fuchsia-700">DIGITAL DOCUMENT WORKSPACE</p><h1 className="text-2xl font-bold tracking-tight text-slate-900">PDF Summarizer</h1></div></div>
-      <div className="flex items-center gap-3"><div className="text-right"><p className="text-sm font-medium text-slate-700">{status}</p><p className="mt-1 text-xs text-slate-500">ประมวลผล PDF และ OCR ภายใน browser</p></div><button type="button" onClick={toggleTheme} className="theme-toggle" aria-label={theme === "dark" ? "เปลี่ยนเป็นโหมดสว่าง" : "เปลี่ยนเป็นโหมดมืด"} aria-pressed={theme === "dark"}><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span><span>{theme === "dark" ? "โหมดสว่าง" : "โหมดมืด"}</span></button></div>
+      <div className="flex items-center gap-3"><div className="text-right"><p className="text-sm font-medium text-slate-700" aria-live="polite">{status}</p><p className="mt-1 text-xs text-slate-500">ประมวลผล PDF และ OCR ภายใน browser</p></div>{busy && canCancel && <button type="button" onClick={cancelWork} className="secondary-button">ยกเลิก</button>}<button type="button" onClick={toggleTheme} className="theme-toggle" aria-label={theme === "dark" ? "เปลี่ยนเป็นโหมดสว่าง" : "เปลี่ยนเป็นโหมดมืด"} aria-pressed={theme === "dark"}><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span><span>{theme === "dark" ? "โหมดสว่าง" : "โหมดมืด"}</span></button></div>
     </header>
+    {busy && <div className="mb-4" role="progressbar" aria-label="ความคืบหน้าการประมวลผล" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-fuchsia-600 transition-[width] duration-300" style={{ width: `${progress}%` }} /></div></div>}
     {!url && <section className="paper-panel mb-5 p-5 md:p-8"><UploadZone onFile={load} /></section>}
     {url && <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(430px,.95fr)]">
       <div className="order-2 lg:order-1"><PdfViewer url={url} /></div>
@@ -163,7 +179,7 @@ export function Workspace() {
           </div>
           <p className="mt-2 text-xs text-amber-700">ทั้งสองโหมดทำงานเมื่อผู้ใช้กดปุ่มเท่านั้น และอาจคาดเดาผิด กรุณาตรวจเทียบกับข้อความต้นฉบับ</p>
         </div>}
-        <div className="mb-3 flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} disabled={busy || text.length < 50} onClick={() => summarize(value)} className="mode-button">{label}</button>)}</div>
+        <div className="mb-3"><div className="flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} disabled={busy || text.length < 50} onClick={() => summarize(value)} className="mode-button">{label}</button>)}</div>{text && <p className="mt-2 text-xs text-slate-500">ปุ่มสรุปย่อและสิ่งที่ต้องทำใช้ Cloud AI เมื่อคุณกดเลือก และจะส่งข้อความที่จัดเรียงแล้วไปยัง Groq</p>}</div>
         {rawText && <div className="mb-3 flex w-fit max-w-full flex-wrap gap-1 rounded-xl bg-slate-100 p-1 text-xs">{summary && <button onClick={() => setView("summary")} className={`tab-button ${view === "summary" ? "tab-button-active" : ""}`}>{summaryMode === "key_points" ? "สรุปประเด็นสำคัญแล้ว" : summaryMode === "short_summary" ? "ผลสรุปย่อ" : "สิ่งที่ต้องทำ"}</button>}<button onClick={() => setView("cleaned")} className={`tab-button ${view === "cleaned" ? "tab-button-active" : ""}`}>ข้อความจัดเรียงแล้ว</button><button onClick={() => setView("raw")} className={`tab-button ${view === "raw" ? "tab-button-active" : ""}`}>ข้อความต้นฉบับ</button></div>}
         <textarea aria-label="Extracted PDF text" readOnly={view === "raw"} className="document-editor min-h-56 flex-1 resize-none rounded-2xl p-4 text-sm leading-7 outline-none" value={visibleText} onChange={(event) => view === "summary" ? setSummary(event.target.value) : setText(event.target.value)} placeholder="เลือกหน้าที่ต้องการอ่าน แล้วข้อความจาก PDF จะแสดงที่นี่" />
         <div className="mt-3 flex flex-wrap gap-2">
@@ -174,6 +190,6 @@ export function Workspace() {
         </div>
       </section>
     </div>}
-    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · Cloud repair ทำงานเมื่อผู้ใช้เลือกเท่านั้น</span><span className="flex items-center gap-2">Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong><a href="https://www.facebook.com/homsing" target="_blank" rel="noopener noreferrer" aria-label="Facebook ของ homsing09" title="Facebook ของ homsing09" className="facebook-link"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.414c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.974h-1.513c-1.49 0-1.956.93-1.956 1.887v2.259h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073Z" /></svg></a></span></footer>
+    <footer className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-fuchsia-100 px-2 pt-4 text-xs text-slate-500"><span>Text extraction/OCR ทำในเครื่อง · Cloud ทำงานเมื่อผู้ใช้เลือก · <a href="/privacy" className="underline underline-offset-2">ข้อมูลความเป็นส่วนตัว</a></span><span className="flex items-center gap-2">Built with Codex · Created by <strong className="font-semibold text-fuchsia-700">homsing09</strong><a href="https://www.facebook.com/homsing" target="_blank" rel="noopener noreferrer" aria-label="Facebook ของ homsing09" title="Facebook ของ homsing09" className="facebook-link"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.414c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.974h-1.513c-1.49 0-1.956.93-1.956 1.887v2.259h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073Z" /></svg></a></span></footer>
   </main>;
 }

@@ -16,14 +16,15 @@ export async function getPdfPageCount(file: File): Promise<number> {
   return pdf.numPages;
 }
 
-export async function extractPdfText(file: File, pageNumbers?: number[]): Promise<ExtractedPdfText> {
+export async function extractPdfText(file: File, pageNumbers?: number[], options?: { signal?: AbortSignal; onProgress?: (completed: number, total: number) => void }): Promise<ExtractedPdfText> {
   ensurePdfMobileCompatibility();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const pages: string[] = [];
   const selectedPages = pageNumbers ?? Array.from({ length: pdf.numPages }, (_, index) => index + 1);
-  for (const pageNumber of selectedPages) {
+  for (const [index, pageNumber] of selectedPages.entries()) {
+    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (pageNumber < 1 || pageNumber > pdf.numPages) throw new Error("Selected PDF page is out of range");
     const content = await (await pdf.getPage(pageNumber)).getTextContent();
     const items: PositionedText[] = content.items.flatMap((item) => {
@@ -37,6 +38,7 @@ export async function extractPdfText(file: File, pageNumbers?: number[]): Promis
       }];
     });
     pages.push(reconstructLines(items));
+    options?.onProgress?.(index + 1, selectedPages.length);
   }
   const rawText = pages.join("\n\n").trim();
   const cleanedPages = pages.map(normalizeExtractedText);
