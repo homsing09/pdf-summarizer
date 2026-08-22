@@ -36,3 +36,10 @@ body {
 .document-editor { border:1px solid #eadfeb; background:linear-gradient(#fff,#fffdff); }
 button:disabled { cursor:not-allowed; opacity:.4; box-shadow:none; }
 button:not(:disabled):hover { transform:translateY(-1px); }
+
+@media (max-width: 640px) {
+  .primary-button, .dark-button, .secondary-button, .mode-button { min-height: 44px; }
+  .page-input { min-height: 44px; }
+  .document-header { align-items: flex-start; }
+  .document-header > div:last-child { width: 100%; text-align: left; }
+}

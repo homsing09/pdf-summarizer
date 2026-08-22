@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { exportAsDocx, exportAsTxt } from "@/lib/export/download";
 import { localAiErrorMessage, repairTextLocally } from "@/lib/ai/local-cleaner";
+import { repairTextInCloud } from "@/lib/ai/cloud-cleaner";
 import { extractPdfText, getPdfPageCount } from "@/lib/pdf/extract-text";
 import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
 import { runOcrFallback } from "@/lib/pdf/ocr-fallback";
@@ -26,7 +27,12 @@ export function Workspace() {
   const [summary, setSummary] = useState("");
   const [view, setView] = useState<TextView>("cleaned");
   const [mode, setMode] = useState<SummaryMode>("key_points");
-  const [cleanerMode, setCleanerMode] = useState<"standard" | "auto" | "all">("standard");
+  const [cleanerMode, setCleanerMode] = useState<"standard" | "auto" | "all" | "cloud">("standard");
+  const isMobile = useSyncExternalStore(
+    () => () => undefined,
+    () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia("(pointer: coarse)").matches,
+    () => false,
+  );
   const [status, setStatus] = useState("พร้อมเริ่มงาน");
   const [busy, setBusy] = useState(false);
 
@@ -73,16 +79,18 @@ export function Workspace() {
     finally { setBusy(false); }
   }
 
-  async function runLocalRepair() {
+  async function runAiRepair() {
     if (!text) return;
-    const localMode = cleanerMode === "all" ? "all" : "auto";
+    const repairMode = cleanerMode === "all" ? "all" : "auto";
     setBusy(true);
     try {
-      const repaired = await repairTextLocally(text, localMode, setStatus);
+      const repaired = cleanerMode === "cloud"
+        ? await repairTextInCloud(text, "auto")
+        : await repairTextLocally(text, repairMode, setStatus);
       setText(repaired); setView("cleaned"); setSummary("");
-      setStatus("Local AI แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ");
+      setStatus(`${cleanerMode === "cloud" ? "AI สำหรับมือถือ" : "Local AI"} แก้ข้อความแล้ว — กรุณาตรวจเทียบกับต้นฉบับ`);
     } catch (error) {
-      setStatus(localAiErrorMessage(error));
+      setStatus(cleanerMode === "cloud" ? (error instanceof Error ? error.message : "AI สำหรับมือถือทำงานไม่สำเร็จ") : localAiErrorMessage(error));
     } finally { setBusy(false); }
   }
 
@@ -110,14 +118,15 @@ export function Workspace() {
           </div>
         </div>}
         {text && <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
-          <div className="mb-3"><p className="font-semibold text-slate-900">การจัดเรียงข้อความ</p><p className="text-xs text-slate-600">Local AI ทำงานใน Browser ไม่ใช้ Groq token · ครั้งแรกต้องดาวน์โหลดโมเดลประมาณ 1 GB</p></div>
+          <div className="mb-3"><p className="font-semibold text-slate-900">การจัดเรียงข้อความ</p><p className="text-xs text-slate-600">{isMobile ? "ตรวจพบโทรศัพท์ — แนะนำ AI สำหรับมือถือ" : "Local AI ทำงานใน Browser ไม่ใช้ Groq token · ครั้งแรกต้องดาวน์โหลดโมเดลประมาณ 1 GB"}</p></div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <button onClick={() => setCleanerMode("standard")} className={`mode-button ${cleanerMode === "standard" ? "mode-button-active" : ""}`}>มาตรฐาน</button>
-            <button onClick={() => setCleanerMode("auto")} className={`mode-button ${cleanerMode === "auto" ? "mode-button-active" : ""}`}>Auto Local AI</button>
-            <button onClick={() => setCleanerMode("all")} className={`mode-button ${cleanerMode === "all" ? "mode-button-active" : ""}`}>Local AI ทั้งหมด</button>
-            {cleanerMode !== "standard" && <button disabled={busy} onClick={runLocalRepair} className="primary-button ml-auto">แก้ข้อความด้วย Local AI</button>}
+            <button onClick={() => setCleanerMode("cloud")} className={`mode-button ${cleanerMode === "cloud" ? "mode-button-active" : ""}`}>AI สำหรับมือถือ</button>
+            {!isMobile && <button onClick={() => setCleanerMode("auto")} className={`mode-button ${cleanerMode === "auto" ? "mode-button-active" : ""}`}>Auto Local AI</button>}
+            {!isMobile && <button onClick={() => setCleanerMode("all")} className={`mode-button ${cleanerMode === "all" ? "mode-button-active" : ""}`}>Local AI ทั้งหมด</button>}
+            {cleanerMode !== "standard" && <button disabled={busy} onClick={runAiRepair} className="primary-button ml-auto">{cleanerMode === "cloud" ? "แก้ข้อความบนมือถือ" : "แก้ข้อความด้วย Local AI"}</button>}
           </div>
-          <p className="mt-2 text-xs text-amber-700">AI อาจคาดเดาผิดได้ ระบบจึงเก็บ “ข้อความต้นฉบับ” ไว้ให้ตรวจเทียบเสมอ</p>
+          <p className="mt-2 text-xs text-amber-700">{cleanerMode === "cloud" ? "โหมดนี้ส่งเฉพาะบรรทัดผิดปกติไปยัง Cloud AI และใช้ API quota" : "Local AI ไม่ส่งข้อความออกจากเครื่อง"} · AI อาจคาดเดาผิด ระบบจึงเก็บข้อความต้นฉบับไว้เสมอ</p>
         </div>}
         <div className="mb-3 flex flex-wrap gap-2">{modes.map(([value, label]) => <button key={value} onClick={() => setMode(value)} className={`mode-button ${mode === value ? "mode-button-active" : ""}`}>{label}</button>)}</div>
         {rawText && <div className="mb-3 flex w-fit gap-1 rounded-xl bg-slate-100 p-1 text-xs"><button onClick={() => setView("cleaned")} className={`tab-button ${view === "cleaned" ? "tab-button-active" : ""}`}>ข้อความจัดเรียงแล้ว</button><button onClick={() => setView("raw")} className={`tab-button ${view === "raw" ? "tab-button-active" : ""}`}>ข้อความต้นฉบับ</button>{summary && <button onClick={() => setView("summary")} className={`tab-button ${view === "summary" ? "tab-button-active" : ""}`}>ผลสรุป</button>}</div>}
