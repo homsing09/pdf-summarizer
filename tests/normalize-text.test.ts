@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeExtractedText } from "@/lib/pdf/normalize-text";
+import { joinThaiSegments, normalizeExtractedText } from "@/lib/pdf/normalize-text";
 
 describe("normalizeExtractedText", () => {
   it("repairs fragmented Thai text while preserving numbers and punctuation", () => {
@@ -19,5 +19,14 @@ describe("normalizeExtractedText", () => {
 
   it("removes zero-width characters and excess whitespace", () => {
     expect(normalizeExtractedText("เอก\u200Bสาร   ทดสอบ")).toBe("เอกสาร ทดสอบ");
+  });
+
+  it("falls back when a mobile Segmenter result is not iterable", () => {
+    expect(joinThaiSegments("เรียนผู้อำนวยการ", { containing() {} })).toBe("เรียนผู้อำนวยการ");
+  });
+
+  it("falls back when segment iteration throws", () => {
+    const broken = { [Symbol.iterator]: () => { throw new TypeError("undefined is not a function"); } };
+    expect(joinThaiSegments("การไฟฟ้าส่วนภูมิภาค", broken)).toBe("การไฟฟ้าส่วนภูมิภาค");
   });
 });

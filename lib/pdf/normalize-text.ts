@@ -8,14 +8,23 @@ function isFragmentedThaiLine(line: string): boolean {
   return shortTokens / thaiTokens.length >= 0.65;
 }
 
+export function joinThaiSegments(fallback: string, segments: unknown): string {
+  if (!segments || typeof (segments as Record<PropertyKey, unknown>)[Symbol.iterator] !== "function") return fallback;
+  try {
+    return Array.from(segments as Iterable<{ segment?: string }>)
+      .map((item) => item?.segment ?? "")
+      .filter(Boolean)
+      .join(" ") || fallback;
+  } catch { return fallback; }
+}
+
 function segmentThaiRun(run: string): string {
   const repairedRun = run.replace(/\u0E4D\u0E32/g, "\u0E33").normalize("NFC");
   if (typeof Intl.Segmenter !== "function") return repairedRun;
-  const segmenter = new Intl.Segmenter("th", { granularity: "word" });
-  return [...segmenter.segment(repairedRun)]
-    .map(({ segment }) => segment)
-    .filter(Boolean)
-    .join(" ");
+  try {
+    const segmenter = new Intl.Segmenter("th", { granularity: "word" });
+    return joinThaiSegments(repairedRun, segmenter.segment(repairedRun));
+  } catch { return repairedRun; }
 }
 
 export function normalizeExtractedText(input: string): string {
