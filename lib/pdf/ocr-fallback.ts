@@ -1,9 +1,11 @@
-export async function runOcrFallback(file: File): Promise<string> {
+export async function runOcrFallback(file: File, pageNumbers?: number[]): Promise<string> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const images: string[] = [];
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+  const selectedPages = pageNumbers ?? Array.from({ length: pdf.numPages }, (_, index) => index + 1);
+  for (const pageNumber of selectedPages) {
+    if (pageNumber < 1 || pageNumber > pdf.numPages) throw new Error("Selected PDF page is out of range");
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement("canvas");
